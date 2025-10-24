@@ -13,6 +13,8 @@
 (define-constant err-unauthorized (err u106))
 (define-constant err-invalid-child-id (err u107))
 (define-constant err-insufficient-funds (err u108))
+(define-constant err-invalid-recipient (err u109))
+(define-constant err-sponsorship-inactive (err u110))
 
 (define-data-var last-token-id uint u0)
 (define-data-var last-child-id uint u0)
@@ -208,6 +210,32 @@
   )
 )
 
+(define-public (transfer-sponsorship (token-id uint) (new-sponsor principal))
+  (let 
+    (
+      (sponsorship (unwrap! (map-get? sponsorship-records token-id) err-not-token-owner))
+      (child-id (get child-id sponsorship))
+      (child-data (unwrap! (map-get? child-profiles child-id) err-child-not-found))
+      (current-sponsor (get sponsor sponsorship))
+    )
+    (asserts! (is-eq tx-sender current-sponsor) err-not-token-owner)
+    (asserts! (not (is-eq new-sponsor current-sponsor)) err-invalid-recipient)
+    (asserts! (get active sponsorship) err-sponsorship-inactive)
+    (try! (nft-transfer? child-sponsorship-nft token-id current-sponsor new-sponsor))
+    (map-set sponsorship-records token-id
+      (merge sponsorship {
+        sponsor: new-sponsor
+      })
+    )
+    (map-set child-profiles child-id
+      (merge child-data {
+        sponsor: (some new-sponsor)
+      })
+    )
+    (ok true)
+  )
+)
+
 (define-public (set-monthly-payment (new-amount uint))
   (begin
     (asserts! (is-eq tx-sender contract-owner) err-owner-only)
@@ -272,5 +300,27 @@
 
 (define-read-only (get-payment-count (sponsor principal) (child-id uint))
   (ok (default-to u0 (map-get? payment-counter {sponsor: sponsor, child-id: child-id})))
+)
+
+(define-read-only (is-active-sponsorship (token-id uint))
+  (match (map-get? sponsorship-records token-id)
+    sponsorship (ok (get active sponsorship))
+    (ok false)
+  )
+)
+
+(define-read-only (get-sponsorship-details (token-id uint))
+  (match (map-get? sponsorship-records token-id)
+    sponsorship 
+      (ok {
+        sponsor: (get sponsor sponsorship),
+        child-id: (get child-id sponsorship),
+        monthly-amount: (get monthly-amount sponsorship),
+        total-paid: (get total-paid sponsorship),
+        last-payment: (get last-payment sponsorship),
+        active: (get active sponsorship)
+      })
+    (err err-not-token-owner)
+  )
 )
 
