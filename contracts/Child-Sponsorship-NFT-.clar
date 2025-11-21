@@ -15,6 +15,7 @@
 (define-constant err-insufficient-funds (err u108))
 (define-constant err-invalid-recipient (err u109))
 (define-constant err-sponsorship-inactive (err u110))
+(define-constant err-insufficient-balance (err u111))
 
 (define-data-var last-token-id uint u0)
 (define-data-var last-child-id uint u0)
@@ -70,6 +71,24 @@
 )
 
 (define-map payment-counter {sponsor: principal, child-id: uint} uint)
+
+(define-data-var last-withdrawal-id uint u0)
+
+(define-map withdrawal-records
+  uint
+  {
+    child-id: uint,
+    recipient: principal,
+    amount: uint,
+    purpose: (string-ascii 200),
+    timestamp: uint,
+    withdrawn-by: principal
+  }
+)
+
+(define-map child-withdrawals uint uint)
+
+(define-map child-total-withdrawn uint uint)
 
 (define-public (register-child (name (string-ascii 50)) (age uint) (location (string-ascii 100)) (education-level (string-ascii 50)))
   (let 
@@ -322,5 +341,63 @@
       })
     (err err-not-token-owner)
   )
+)
+
+(define-public (withdraw-funds (child-id uint) (recipient principal) (amount uint) (purpose (string-ascii 200)))
+  (let 
+    (
+      (child-data (unwrap! (map-get? child-profiles child-id) err-child-not-found))
+      (current-balance (var-get contract-balance))
+      (withdrawal-id (+ (var-get last-withdrawal-id) u1))
+      (withdrawal-count (default-to u0 (map-get? child-withdrawals child-id)))
+      (total-withdrawn (default-to u0 (map-get? child-total-withdrawn child-id)))
+    )
+    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+    (asserts! (get active child-data) err-child-not-found)
+    (asserts! (> amount u0) err-invalid-amount)
+    (asserts! (>= current-balance amount) err-insufficient-balance)
+    (try! (as-contract (stx-transfer? amount tx-sender recipient)))
+    (map-set withdrawal-records withdrawal-id
+      {
+        child-id: child-id,
+        recipient: recipient,
+        amount: amount,
+        purpose: purpose,
+        timestamp: stacks-block-height,
+        withdrawn-by: tx-sender
+      }
+    )
+    (map-set child-withdrawals child-id (+ withdrawal-count u1))
+    (map-set child-total-withdrawn child-id (+ total-withdrawn amount))
+    (var-set contract-balance (- current-balance amount))
+    (var-set last-withdrawal-id withdrawal-id)
+    (ok withdrawal-id)
+  )
+)
+
+(define-read-only (get-withdrawal-record (withdrawal-id uint))
+  (ok (map-get? withdrawal-records withdrawal-id))
+)
+
+(define-read-only (get-child-withdrawal-count (child-id uint))
+  (ok (default-to u0 (map-get? child-withdrawals child-id)))
+)
+
+(define-read-only (get-child-net-balance (child-id uint))
+  (match (map-get? child-profiles child-id)
+    child-data
+      (let
+        (
+          (total-received (get total-received child-data))
+          (total-withdrawn (default-to u0 (map-get? child-total-withdrawn child-id)))
+        )
+        (ok (- total-received total-withdrawn))
+      )
+    (err err-child-not-found)
+  )
+)
+
+(define-read-only (get-child-total-withdrawn (child-id uint))
+  (ok (default-to u0 (map-get? child-total-withdrawn child-id)))
 )
 
